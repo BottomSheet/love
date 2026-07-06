@@ -8,7 +8,7 @@ import * as THREE from 'three'
 
 // Текст, из которого «сплетено» сердце
 const HEART_TEXT = 'Я люблю тебя'
-const PARTICLE_COUNT = 240
+const PARTICLE_COUNT = 300
 
 const canvasRef = ref(null)
 
@@ -69,7 +69,12 @@ function buildHeart() {
 
   heartGroup = new THREE.Group()
   const scale = 0.09
-  const baseSize = 0.42
+  // ВАЖНО: baseSize должен быть МАЛЕНЬКИМ относительно scale — иначе
+  // надписи перекрывают друг друга сплошным пятном и форма сердца не
+  // читается. 0.05 даёт текст размером ~3% от диаметра сердца — как
+  // в оригинальном HeartScene.tsx (там было fontSize=0.08 при том же
+  // порядке scale, то есть очень мелкий текст, много повторов).
+  const baseSize = 0.05
 
   for (let i = 0; i < PARTICLE_COUNT; i++) {
     const t = Math.random() * Math.PI * 2
@@ -81,7 +86,7 @@ function buildHeart() {
 
     const sprite = new THREE.Sprite(spriteMaterial)
     sprite.position.set(x * scale, y * scale, z * scale)
-    const s = baseSize * (0.7 + Math.random() * 0.6)
+    const s = baseSize * (0.8 + Math.random() * 0.4)
     sprite.scale.set(s * aspect, s, 1)
     heartGroup.add(sprite)
   }

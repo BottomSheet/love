@@ -61,7 +61,8 @@
           <div class="w-12 h-px bg-pink-deep/30 mx-auto mb-8" />
 
           <button
-            class="text-white/20 hover:text-white/60 transition-colors uppercase text-[10px] tracking-widest font-mono"
+            class="text-white/20 hover:text-white/60 transition-colors uppercase text-[10px] tracking-widest font-mono p-4 -m-4"
+            style="min-width: 44px; min-height: 44px"
             @click="backToConsole"
           >
             Re-encrypt
@@ -129,12 +130,22 @@ const AUDIO_SRC = `${import.meta.env.BASE_URL}angel.mp3`
 const CHORUS_START = 258 // ориентировочно ~4:18 в полной версии песни
 const CHORUS_END = 340 // ориентировочно ~5:40
 
+// Отрывок короткий и зацикливается — чтобы это не резало слух:
+// 1) на стыке цикла громкость на миг гаснет и снова нарастает (без щелчка)
+// 2) с каждым повтором звук становится немного громче, до предела MAX_VOLUME
+const BASE_VOLUME = 0.28 // громкость первого проигрывания
+const VOLUME_STEP = 0.16 // насколько прибавляем с каждым повтором
+const MAX_VOLUME = 1
+const FADE_MS = 260 // длительность затухания/нарастания на стыке цикла
+
 const audioRef = ref(null)
 const muted = ref(false)
 const showDecrypted = ref(false)
 const showHint = ref(false)
 let decryptedTimer = null
 let hintTimer = null
+let currentTargetVolume = BASE_VOLUME
+let isLooping = false
 
 // подстраиваем желаемый диапазон под реальную длину файла:
 // если файл короче, чем CHORUS_START, просто играем его с начала до конца
@@ -148,13 +159,40 @@ function clampedChorus(duration) {
   return { start: CHORUS_START, end: Math.min(CHORUS_END, duration) }
 }
 
+// плавно меняет громкость audio-элемента от from до to за duration мс
+function fadeVolume(audio, from, to, duration) {
+  return new Promise((resolve) => {
+    const start = performance.now()
+    function step(now) {
+      const t = Math.min(1, (now - start) / duration)
+      audio.volume = from + (to - from) * t
+      if (t < 1) requestAnimationFrame(step)
+      else resolve()
+    }
+    requestAnimationFrame(step)
+  })
+}
+
+async function handleLoopPoint(a, start) {
+  if (isLooping) return
+  isLooping = true
+  try {
+    await fadeVolume(a, a.volume, 0, FADE_MS)
+    a.currentTime = start
+    currentTargetVolume = Math.min(MAX_VOLUME, currentTargetVolume + VOLUME_STEP)
+    await fadeVolume(a, 0, currentTargetVolume, FADE_MS)
+  } finally {
+    isLooping = false
+  }
+}
+
 onMounted(() => {
   const a = audioRef.value
   if (a) {
     a.addEventListener('timeupdate', () => {
       const { start, end } = clampedChorus(a.duration)
-      if (end > 0 && a.currentTime >= end) {
-        a.currentTime = start
+      if (end > 0 && !isLooping && a.currentTime >= end - FADE_MS / 1000) {
+        handleLoopPoint(a, start)
       }
     })
     // диагностика: если аудио не играет, откройте консоль браузера (F12 /
@@ -179,9 +217,16 @@ function playChorus() {
       /* метаданные ещё не готовы — сработает через loadedmetadata ниже */
     }
     a.muted = muted.value
-    a.play().catch(() => {
-      console.info('Аудио пока недоступно — проверьте, что файл public/angel.mp3 добавлен.')
-    })
+    currentTargetVolume = BASE_VOLUME
+    a.volume = 0
+    a
+      .play()
+      .then(() => {
+        fadeVolume(a, 0, currentTargetVolume, FADE_MS)
+      })
+      .catch(() => {
+        console.info('Аудио пока недоступно — проверьте, что файл public/angel.mp3 добавлен.')
+      })
   }
   if (a.readyState >= 1) seekAndPlay()
   else a.addEventListener('loadedmetadata', seekAndPlay, { once: true })
@@ -248,6 +293,8 @@ function backToConsole(e) {
   e.stopPropagation()
   stage.value = 'console'
   if (audioRef.value) audioRef.value.pause() // добавлено
+  currentTargetVolume = BASE_VOLUME
+  isLooping = false
   clearTimeout(decryptedTimer)
   clearTimeout(hintTimer)
   showDecrypted.value = false
